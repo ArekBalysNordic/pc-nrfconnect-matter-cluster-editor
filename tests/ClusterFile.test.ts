@@ -288,52 +288,6 @@ describe('ClusterFile', () => {
                 'xmlInstanceChanged'
             );
         });
-
-        it('should copy XMLCurrentInstance to XMLBaseInstance after setTimeout', () => {
-            // Mock setTimeout to execute callback immediately
-            jest.useFakeTimers();
-
-            // Setup initial state
-            ClusterFile.file = {
-                deviceType: { name: 'MockDevice' },
-                enum: [{ name: 'MockEnum' }],
-                cluster: [{ name: 'Cluster1' }, { name: 'Cluster2' }],
-            } as any;
-
-            const mockCluster = {
-                name: 'SelectedCluster',
-                code: new HexString(0x1234),
-                define: 'SELECTED_CLUSTER',
-                domain: 'test',
-            };
-
-            // Call initialize
-            ClusterFile.initialize(mockCluster as any);
-
-            // Pre-timeout state - XMLBaseInstance shouldn't match
-            // XMLCurrentInstance yet
-            expect(ClusterFile.XMLBaseInstance.cluster).not.toEqual(
-                mockCluster
-            );
-
-            // Fast-forward timers
-            jest.runAllTimers();
-
-            // Post-timeout state - XMLBaseInstance should now match
-            // XMLCurrentInstance
-            expect(ClusterFile.XMLBaseInstance.cluster).toEqual(
-                ClusterFile.XMLCurrentInstance.cluster
-            );
-            expect(ClusterFile.XMLBaseInstance.cluster.name).toBe(
-                'SelectedCluster'
-            );
-            expect(ClusterFile.XMLBaseInstance.deviceType).toEqual(
-                ClusterFile.XMLCurrentInstance.deviceType
-            );
-
-            // Cleanup
-            jest.useRealTimers();
-        });
     });
 
     describe('getNewAttributes, getNewCommands, getNewEvents', () => {

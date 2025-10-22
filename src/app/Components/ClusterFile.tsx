@@ -8,7 +8,7 @@
 
 import { logger, telemetry } from '@nordicsemiconductor/pc-nrfconnect-shared';
 
-import { defaultXMLConfigurator } from '../defaults';
+import { defaultXMLCluster, defaultXMLConfigurator } from '../defaults';
 import {
     HexString,
     XMLAttribute,
@@ -81,6 +81,11 @@ class ClusterFile {
     static editingClusterIndex = -1;
     static editingDeviceTypeIndex = -1;
     static editingExtensionIndex = -1;
+
+    // Available items for sidebar lists (these are working copies that get updated with user changes)
+    static availableClusters: XMLCluster[] = [];
+    static availableDeviceTypes: XMLDeviceType[] = [];
+    static availableExtensions: XMLClusterExtension[] = [];
 
     /**
      * The current instance of the cluster file.
@@ -156,13 +161,9 @@ class ClusterFile {
     static async load(fileUrl: File, content: string): Promise<boolean> {
         try {
             // Clear XMLCurrentInstance and XMLBaseInstance before loading new data
-            // Create deep copies to ensure they are independent objects
-            this.XMLCurrentInstance = JSON.parse(
-                JSON.stringify(defaultXMLConfigurator)
-            );
-            this.XMLBaseInstance = JSON.parse(
-                JSON.stringify(defaultXMLConfigurator)
-            );
+            // Create deep copies to ensure they are independent objects (use deepClone to preserve HexString)
+            this.XMLCurrentInstance = deepClone(defaultXMLConfigurator);
+            this.XMLBaseInstance = deepClone(defaultXMLConfigurator);
 
             this.fileUrl = fileUrl;
             this.content = content;
@@ -295,6 +296,56 @@ class ClusterFile {
     }
 
     /**
+     * Saves current changes back to the appropriate working array before switching elements.
+     * This ensures changes are preserved when navigating between multiple items.
+     *
+     * @function saveCurrentChanges
+     * @returns {void}
+     */
+    static saveCurrentChanges() {
+        // Save cluster changes
+        if (
+            this.editingClusterIndex >= 0 &&
+            this.editingClusterIndex < this.availableClusters.length &&
+            this.XMLCurrentInstance.cluster
+        ) {
+            this.availableClusters[this.editingClusterIndex] = deepClone(
+                this.XMLCurrentInstance.cluster
+            );
+        }
+
+        // Save device type changes
+        if (
+            this.editingDeviceTypeIndex >= 0 &&
+            this.editingDeviceTypeIndex < this.availableDeviceTypes.length &&
+            this.XMLCurrentInstance.deviceType
+        ) {
+            this.availableDeviceTypes[this.editingDeviceTypeIndex] = deepClone(
+                this.XMLCurrentInstance.deviceType
+            );
+        }
+
+        // Save extension changes
+        if (
+            this.editingExtensionIndex >= 0 &&
+            this.editingExtensionIndex < this.availableExtensions.length &&
+            this.loadedClusterExtension
+        ) {
+            const extension =
+                this.availableExtensions[this.editingExtensionIndex];
+
+            // Update extension with current cluster data
+            if (this.XMLCurrentInstance.cluster) {
+                extension.$.code = this.XMLCurrentInstance.cluster
+                    .code as HexString;
+                extension.attribute = this.XMLCurrentInstance.cluster.attribute;
+                extension.command = this.XMLCurrentInstance.cluster.command;
+                extension.event = this.XMLCurrentInstance.cluster.event;
+            }
+        }
+    }
+
+    /**
      * Initializes a specific cluster extension from multiple extensions.
      *
      * This function sets up the XMLCurrentInstance and XMLBaseInstance with the selected
@@ -311,6 +362,9 @@ class ClusterFile {
         extension: XMLClusterExtension,
         extensionIndex = 0
     ) {
+        // Save current changes before switching
+        this.saveCurrentChanges();
+
         this.editingExtensionIndex = extensionIndex;
 
         // Clear XMLCurrentInstance and XMLBaseInstance
@@ -334,19 +388,42 @@ class ClusterFile {
             },
         };
 
+        // Read from the working array to get any saved changes, or fall back to parameter
+        // This supports both change preservation (when availableExtensions is populated) and
+        // backward compatibility (when called with just an extension parameter, e.g., in tests or initial load)
+        let workingExtension: XMLClusterExtension;
+        if (
+            this.availableExtensions.length > extensionIndex &&
+            this.availableExtensions[extensionIndex]
+        ) {
+            // Use saved version from availableExtensions (preserves changes when switching)
+            workingExtension = deepClone(
+                this.availableExtensions[extensionIndex]
+            );
+        } else {
+            // Fall back to parameter (for initial load or tests)
+            workingExtension = extension;
+            // Also populate availableExtensions for consistency
+            if (extension) {
+                this.availableExtensions[extensionIndex] = deepClone(extension);
+            }
+        }
+
         // Copy extension attributes, commands and events
-        this.XMLCurrentInstance.cluster.code = extension.$.code as HexString;
+        this.XMLCurrentInstance.cluster.code = workingExtension.$
+            .code as HexString;
 
-        if (extension.attribute) {
-            this.XMLCurrentInstance.cluster.attribute = extension.attribute;
+        if (workingExtension.attribute) {
+            this.XMLCurrentInstance.cluster.attribute =
+                workingExtension.attribute;
         }
 
-        if (extension.command) {
-            this.XMLCurrentInstance.cluster.command = extension.command;
+        if (workingExtension.command) {
+            this.XMLCurrentInstance.cluster.command = workingExtension.command;
         }
 
-        if (extension.event) {
-            this.XMLCurrentInstance.cluster.event = extension.event;
+        if (workingExtension.event) {
+            this.XMLCurrentInstance.cluster.event = workingExtension.event;
         }
 
         this.loadedClusterExtension = true;
@@ -366,32 +443,52 @@ class ClusterFile {
      * @returns {void}
      */
     static initialize(xmlCluster: XMLCluster, clusterIndex = 0) {
+        // Save current changes before switching
+        this.saveCurrentChanges();
+
         this.editingClusterIndex = clusterIndex;
         // Reset XMLCurrentInstance to clean state
-        this.XMLCurrentInstance = JSON.parse(
-            JSON.stringify(defaultXMLConfigurator)
-        );
+        this.XMLCurrentInstance = {
+            cluster: deepClone(defaultXMLCluster),
+        };
 
         // Copy all elements except cluster from XMLFile to XMLCurrentInstance
-        Object.keys(this.file).forEach(key => {
-            if (key !== 'cluster') {
-                (this.XMLCurrentInstance as any)[key] = (this.file as any)[key];
-            }
-        });
+        if (this.file) {
+            Object.keys(this.file).forEach(key => {
+                if (key !== 'cluster') {
+                    (this.XMLCurrentInstance as any)[key] = (this.file as any)[
+                        key
+                    ];
+                }
+            });
+        }
 
-        this.XMLCurrentInstance.cluster = xmlCluster;
+        // Read from the working array to get any saved changes, or fall back to parameter
+        // This supports both change preservation (when availableClusters is populated) and
+        // backward compatibility (when called with just a cluster parameter, e.g., in tests)
+        if (
+            this.availableClusters.length > clusterIndex &&
+            this.availableClusters[clusterIndex]
+        ) {
+            // Use saved version from availableClusters (preserves changes when switching)
+            this.XMLCurrentInstance.cluster = deepClone(
+                this.availableClusters[clusterIndex]
+            );
+        } else {
+            // Fall back to parameter (for initial load or tests)
+            // Clone the parameter to ensure we have an independent copy
+            this.XMLCurrentInstance.cluster = deepClone(xmlCluster);
+            // Also populate availableClusters for consistency
+            if (xmlCluster) {
+                this.availableClusters[clusterIndex] = deepClone(xmlCluster);
+            }
+        }
         eventEmitter.emit('xmlInstanceChanged');
 
         // Wait for emit to finish and copy XMLCurrentInstance to XMLBaseInstance
         setTimeout(() => {
-            // Reset XMLBaseInstance to clean state before copying
-            this.XMLBaseInstance = JSON.parse(
-                JSON.stringify(defaultXMLConfigurator)
-            );
-
-            this.XMLBaseInstance = JSON.parse(
-                JSON.stringify(this.XMLCurrentInstance)
-            );
+            // Copy current instance (use deepClone to preserve HexString)
+            this.XMLBaseInstance = deepClone(this.XMLCurrentInstance);
         }, 100);
 
         // Convert HexString to XMLDeviceTypeIds structure if needed
@@ -1148,14 +1245,15 @@ class ClusterFile {
 
         // Build clusters array
         if (this.originalClusters.length > 0) {
-            xmlFile.cluster = [...this.originalClusters];
-            // Replace the edited cluster if it has non-default values
-            if (this.editingClusterIndex >= 0 && validation.shouldSaveCluster) {
-                // Clean empty descriptions from cluster before saving
-                const cleanedCluster = this.cleanClusterDescriptions(
-                    this.XMLCurrentInstance.cluster
+            // Use availableClusters which contains all modifications
+            if (this.availableClusters.length > 0) {
+                // Clean empty descriptions from all modified clusters before saving
+                xmlFile.cluster = this.availableClusters.map(cluster =>
+                    this.cleanClusterDescriptions(cluster)
                 );
-                xmlFile.cluster[this.editingClusterIndex] = cleanedCluster;
+            } else {
+                // Fallback to originals if no modifications
+                xmlFile.cluster = [...this.originalClusters];
             }
         } else if (validation.shouldSaveCluster) {
             // Clean empty descriptions from cluster before saving
@@ -1167,23 +1265,28 @@ class ClusterFile {
 
         // Build device types array
         if (this.originalDeviceTypes.length > 1) {
-            xmlFile.deviceType = [...this.originalDeviceTypes];
-            // Replace the edited device type if it has non-default values
+            // Use availableDeviceTypes which contains all modifications
+            if (this.availableDeviceTypes.length > 0) {
+                // Clean empty descriptions from all modified device types before saving
+                xmlFile.deviceType = this.availableDeviceTypes.map(deviceType =>
+                    this.cleanDeviceTypeDescriptions(deviceType)
+                );
+            } else {
+                // Fallback to originals if no modifications
+                xmlFile.deviceType = [...this.originalDeviceTypes];
+            }
+        } else if (this.originalDeviceTypes.length === 1) {
+            // Single device type - use available or current
             if (
-                this.editingDeviceTypeIndex >= 0 &&
-                validation.shouldSaveDeviceType &&
-                this.XMLCurrentInstance.deviceType
+                this.availableDeviceTypes.length > 0 &&
+                this.availableDeviceTypes[0]
             ) {
                 // Clean empty descriptions from device type before saving
                 const cleanedDeviceType = this.cleanDeviceTypeDescriptions(
-                    this.XMLCurrentInstance.deviceType
+                    this.availableDeviceTypes[0]
                 );
-                xmlFile.deviceType[this.editingDeviceTypeIndex] =
-                    cleanedDeviceType;
-            }
-        } else if (this.originalDeviceTypes.length === 1) {
-            // Single device type
-            if (
+                xmlFile.deviceType = cleanedDeviceType;
+            } else if (
                 validation.shouldSaveDeviceType &&
                 this.XMLCurrentInstance.deviceType
             ) {
